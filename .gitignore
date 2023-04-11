@@ -4,3 +4,7 @@
 
 /DotNetTools/.vs/DotNetTools
 /DotNetTools/XmlToAppSettingsJson/obj
+/DotNetTools/AppSettingsToJsonPoco/bin/Debug/net7.0
+/DotNetTools/AppSettingsToJsonPoco/obj
+/DotNetTools/AppSettingsJsonToPoco/bin/Debug/net7.0
+/DotNetTools/AppSettingsJsonToPoco/obj
