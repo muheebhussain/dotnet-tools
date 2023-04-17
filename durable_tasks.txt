@@ -1,0 +1,76 @@
+As an Azure Expert, I would like to present the case for using the Durable Task Framework as a superior solution for running long-running jobs in Azure Kubernetes Service (AKS) over the standard .NET BackgroundService. The following are the key advantages of the Durable Task Framework that make it an excellent choice for our use case:
+
+Stateful Workflows:
+
+The Durable Task Framework provides the ability to create stateful workflows. This means that the state of a workflow is automatically preserved across multiple steps, enabling long-running and complex processes.
+In contrast, BackgroundService is a stateless service, making it challenging to manage the state of long-running tasks, especially when they involve multiple steps.
+Fault Tolerance:
+
+Durable Task Framework offers built-in fault tolerance. If a worker node fails or is restarted, the framework automatically resumes the workflow from its latest checkpoint.
+With BackgroundService, we would have to implement fault tolerance and recovery mechanisms manually, which can be error-prone and time-consuming.
+Scalability:
+
+The Durable Task Framework is highly scalable, allowing us to distribute the execution of tasks across multiple worker nodes in AKS. This enables efficient processing of large volumes of tasks.
+BackgroundService, on the other hand, is typically limited to a single worker node, potentially causing performance bottlenecks.
+Orchestrations and Coordination:
+
+The Durable Task Framework enables orchestrating multiple tasks and coordinating parallel and sequential execution. This is essential for scenarios with dependencies between tasks or when we need to run multiple tasks concurrently.
+BackgroundService does not have built-in orchestration capabilities, making it less suitable for scenarios with complex task dependencies.
+Monitoring and Diagnostics:
+
+The Durable Task Framework provides robust monitoring and diagnostic capabilities, including tracking the progress and status of workflows and tasks. This enhances transparency and enables quicker troubleshooting.
+BackgroundService does not provide comprehensive monitoring and diagnostic tools out of the box.
+Cloud-Native:
+
+The Durable Task Framework is designed to work seamlessly with Azure services, making it cloud-native and well-suited for use with AKS.
+BackgroundService is a more general-purpose service and lacks the cloud-native capabilities of the Durable Task Framework.
+Flexibility:
+
+The Durable Task Framework allows us to implement complex workflows with conditional logic, loops, retries, timeouts, and more. This flexibility makes it possible to address a wide range of business scenarios.
+BackgroundService provides a more basic infrastructure for background tasks and may require custom code to achieve similar levels of flexibility.
+Cost Efficiency:
+
+The Durable Task Framework offers cost-efficiency by allowing tasks to be suspended and resumed later. This reduces the amount of compute resources required, especially for tasks that involve long periods of waiting (e.g., waiting for external events).
+With BackgroundService, tasks would need to run continuously, consuming more resources and increasing costs.
+In summary, the Durable Task Framework provides state management, fault tolerance, scalability, orchestration capabilities, enhanced monitoring, cloud-native integration, flexibility, and cost efficiency. These advantages make it a compelling choice for running long-running jobs in AKS. I recommend adopting the Durable Task Framework to address our use case effectively and efficiently.
+
+
+stateDiagram
+   direction LR
+   
+   accTitle: Durable Task Framework State Diagram
+   accDescr: State diagram showcasing the fault tolerance and stateful capabilities of the Durable Task Framework.
+
+   classDef processing fill:#e6e6ff,stroke:#0000ff
+   classDef success fill:#b3ffb3,stroke:#00b300
+   classDef failure fill:#ffb3b3,stroke:#ff1a1a
+   
+   [*] --> Idle
+   Idle --> Orchestrator: Trigger Orchestrator
+   Orchestrator --> PollingService: Trigger Polling Service
+   Orchestrator --> SubOrchestrator: Trigger Sub-Orchestrator
+   PollingService --> FetchDataAPI: Fetch Data from API
+   PollingService --> FetchDataDB: Fetch Data from DB
+   FetchDataAPI --> ValidateAndUpdateDB: Validate and Update DB
+   FetchDataDB --> ValidateAndUpdateDB: Validate and Update DB
+   ValidateAndUpdateDB --> PostUpdateWebhook: Post Update to Webhook
+   PostUpdateWebhook --> SubOrchestrator: Sub-Orchestrator Activities
+   SubOrchestrator --> Completed: Complete Activities
+   Completed --> [*]
+   
+   PollingService --> Failed: Failure
+   FetchDataAPI --> Failed: Failure
+   FetchDataDB --> Failed: Failure
+   ValidateAndUpdateDB --> Failed: Failure
+   PostUpdateWebhook --> Failed: Failure
+   SubOrchestrator --> Failed: Failure
+   Failed --> Retry: Retry Task
+   Retry --> PollingService: Retry
+   
+   class PollingService, FetchDataAPI, FetchDataDB, ValidateAndUpdateDB, PostUpdateWebhook, SubOrchestrator processing
+   class Completed success
+   class Failed, Retry failure
+   class Orchestrator orchestration
+
+
+https://github.com/Azure/durabletask/wiki/Core-Concepts
