@@ -1,0 +1,72 @@
+using System;
+using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Newtonsoft.Json;
+
+public class NewtonsoftJsonToSystemTextJsonConverter : JsonConverter<object>
+{
+    public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        // Implement custom logic for reading JSON and handling Newtonsoft.Json attributes
+    }
+
+    public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+    {
+        // Implement custom logic for writing JSON and handling Newtonsoft.Json attributes
+        var properties = value.GetType().GetProperties();
+        foreach (var prop in properties)
+        {
+            var attr = prop.GetCustomAttribute<JsonPropertyAttribute>();
+            if (attr != null)
+            {
+                // Use the property name from the JsonProperty attribute
+                var propName = attr.PropertyName ?? prop.Name;
+                var propValue = prop.GetValue(value);
+                writer.WritePropertyName(propName);
+                JsonSerializer.Serialize(writer, propValue, options);
+            }
+        }
+    }
+}
+
+public void ConfigureServices(IServiceCollection services)
+{
+    var jsonSerializerOptions = new JsonSerializerOptions
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+    jsonSerializerOptions.Converters.Add(new NewtonsoftJsonToSystemTextJsonConverter());
+
+    services.AddHttpClient("MyClient", client =>
+    {
+        // Configure client if necessary
+    })
+    .ConfigureHttpClient(client =>
+    {
+        // Here you can set default headers, base address, etc.
+    })
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        return new HttpClientHandler();
+    })
+    .AddHttpMessageHandler(() => new CustomJsonMessageHandler(jsonSerializerOptions));
+}
+
+public class CustomJsonMessageHandler : DelegatingHandler
+{
+    private readonly JsonSerializerOptions _options;
+
+    public CustomJsonMessageHandler(JsonSerializerOptions options)
+    {
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        // Modify the request here if needed to use your custom JsonSerializerOptions
+        // For example, intercept and modify requests with JSON content
+
+        return await base.SendAsync(request, cancellationToken);
+    }
+}
