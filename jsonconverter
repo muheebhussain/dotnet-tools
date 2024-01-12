@@ -64,8 +64,18 @@ public class CustomJsonMessageHandler : DelegatingHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        // Modify the request here if needed to use your custom JsonSerializerOptions
-        // For example, intercept and modify requests with JSON content
+        // Check if the request needs custom serialization
+        if (request.Content is JsonContent)
+        {
+            // Read the content as a string
+            string contentString = await request.Content.ReadAsStringAsync();
+            // Deserialize the content to an object using the custom options
+            var deserializedObject = JsonSerializer.Deserialize(contentString, _options);
+            // Serialize the object back to a JSON string using the custom options
+            string newJson = JsonSerializer.Serialize(deserializedObject, _options);
+            // Replace the request content with the new JSON string
+            request.Content = new StringContent(newJson, Encoding.UTF8, "application/json");
+        }
 
         return await base.SendAsync(request, cancellationToken);
     }
