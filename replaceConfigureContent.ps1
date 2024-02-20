@@ -33,3 +33,28 @@ foreach ($file in $files) {
         Write-Host "No Configure method found in file: $file or it does not match the expected pattern."
     }
 }
+
+
+
+$folderPath = "C:\Path\To\Your\CSharp\Project\Folder" # Update with the path to your project
+
+# Define the regex pattern to match [Table attributes followed by a blank line
+$pattern = '(\[Table[^\]]*\]\r?\n)\r?\n'
+
+# Get all C# files in the specified folder
+$files = Get-ChildItem -Path $folderPath -Filter *.cs -Recurse
+
+foreach ($file in $files) {
+    # Read the content of the file
+    $content = Get-Content -Path $file.FullName -Raw
+
+    # Replace the matched pattern ([Table attribute followed by blank line) with just the attribute
+    $updatedContent = $content -replace $pattern, '$1'
+
+    # Write the updated content back to the file
+    Set-Content -Path $file.FullName -Value $updatedContent
+
+    Write-Host "Processed file: $($file.Name)"
+}
+
+Write-Host "Completed processing files."
