@@ -50,3 +50,33 @@ SET @EnumTemplate = REPLACE(@EnumTemplate, '{0}', @EnumBody);
 
 -- Output the result
 PRINT @EnumTemplate;
+
+-- accepts id and descirption columns as parameters
+
+DECLARE @TableName NVARCHAR(128) = N'YourTableName'; -- Set your table name here
+DECLARE @IdColumnName NVARCHAR(128) = N'Id'; -- Set your Id column name here
+DECLARE @DescriptionColumnName NVARCHAR(128) = N'Description'; -- Set your Description column name here
+DECLARE @EnumName NVARCHAR(128) = N'MyEnum'; -- Set your enum name here
+DECLARE @SQL NVARCHAR(MAX);
+DECLARE @EnumBody NVARCHAR(MAX) = '';
+DECLARE @EnumTemplate NVARCHAR(MAX) = 'public enum ' + @EnumName + ' {0}';
+
+-- Dynamic SQL to generate the enum body
+SET @SQL = N'SELECT @EnumBodyOUT = (SELECT ''['' + CAST(' + QUOTENAME(@IdColumnName) + N' AS NVARCHAR) + ''] '' + 
+            ' + QUOTENAME(@DescriptionColumnName) + N' + '' = '' + CAST(' + QUOTENAME(@IdColumnName) + N' AS NVARCHAR) + '','' + CHAR(13)
+            FROM ' + QUOTENAME(@TableName) + 
+            ' ORDER BY ' + QUOTENAME(@IdColumnName) + N' FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)'')';
+
+-- Execute the dynamic SQL
+EXEC sp_executesql @SQL, N'@EnumBodyOUT NVARCHAR(MAX) OUTPUT', @EnumBody OUTPUT;
+
+-- Remove the last comma
+IF LEN(@EnumBody) > 0
+    SET @EnumBody = LEFT(@EnumBody, LEN(@EnumBody) - 2);
+
+-- Combine the template and the body
+SET @EnumTemplate = REPLACE(@EnumTemplate, '{0}', @EnumBody);
+
+-- Output the result
+PRINT @EnumTemplate;
+
