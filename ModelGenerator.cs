@@ -10,18 +10,30 @@ namespace YourNamespace
     {
     }
 
-    public class ModelGenerator
+   public class ModelGenerator
     {
-        public static void GenerateModel(Type entityType)
+        private const string outputDirectory = @"Path\To\Test.Model\Project";
+
+        public static void GenerateModel(string entityName)
         {
+            Type entityType = Assembly.GetExecutingAssembly().GetTypes()
+                .FirstOrDefault(t => t.Name.Equals(entityName + "Entity", StringComparison.Ordinal));
+
+            if (entityType == null)
+            {
+                Console.WriteLine($"Entity type {entityName}Entity not found.");
+                return;
+            }
+
             var properties = entityType.GetProperties()
                 .Where(p => p.PropertyType.IsPrimitive || p.PropertyType == typeof(string) || p.PropertyType == typeof(DateTime)); // Add more simple types as needed
 
+            string modelName = entityName + "Model";
             StringBuilder classBuilder = new StringBuilder();
             classBuilder.AppendLine("using System;");
-            classBuilder.AppendLine("namespace YourNamespace.Models");
+            classBuilder.AppendLine("namespace Test.Model");
             classBuilder.AppendLine("{");
-            classBuilder.AppendLine($"    public class {entityType.Name}Model : IModel");
+            classBuilder.AppendLine($"    public class {modelName} : IModel");
             classBuilder.AppendLine("    {");
 
             foreach (var prop in properties)
@@ -42,7 +54,8 @@ namespace YourNamespace
             classBuilder.AppendLine("    }");
             classBuilder.AppendLine("}");
 
-            File.WriteAllText($"{entityType.Name}Model.cs", classBuilder.ToString());
+            string outputPath = Path.Combine(outputDirectory, $"{modelName}.cs");
+            File.WriteAllText(outputPath, classBuilder.ToString());
         }
     }
 }
