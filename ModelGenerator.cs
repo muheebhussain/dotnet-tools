@@ -36,17 +36,21 @@ namespace YourNamespace
             classBuilder.AppendLine($"    public class {modelName} : IModel");
             classBuilder.AppendLine("    {");
 
-            foreach (var prop in properties)
+           foreach (var prop in properties)
             {
-                string typeName = prop.PropertyType.Name;
-                string propName = prop.Name;
-                string defaultValue = "";
+                Type propType = prop.PropertyType;
+                string typeName = propType.IsGenericType && propType.GetGenericTypeDefinition() == typeof(Nullable<>)
+                                  ? Nullable.GetUnderlyingType(propType).Name + "?"
+                                  : propType.Name;
 
-                // Adjust non-nullable string properties to have a default value of null!
-                if (prop.PropertyType == typeof(string))
+                if (propType.IsGenericType && typeof(IEnumerable<>).IsAssignableFrom(propType.GetGenericTypeDefinition()))
                 {
-                    defaultValue = " = null!";
+                    Type genericTypeArgument = propType.GetGenericArguments()[0];
+                    typeName = $"IEnumerable<{genericTypeArgument.Name}>";
                 }
+
+                string propName = prop.Name;
+                string defaultValue = propType == typeof(string) ? " = null!;" : "";
 
                 classBuilder.AppendLine($"        public {typeName} {propName} {{ get; set; }}{defaultValue}");
             }
