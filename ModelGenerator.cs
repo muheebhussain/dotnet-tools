@@ -77,4 +77,23 @@ namespace YourNamespace
             File.WriteAllText(outputPath, classBuilder.ToString());
         }
     }
+
+    private static bool IsNullable(PropertyInfo propertyInfo)
+    {
+        // Check for Nullable attribute on the property
+        var nullableAttribute = propertyInfo.CustomAttributes
+            .FirstOrDefault(attr => attr.AttributeType.FullName == "System.Runtime.CompilerServices.NullableAttribute");
+        if (nullableAttribute != null)
+        {
+            var attributeArguments = nullableAttribute.ConstructorArguments;
+            if (attributeArguments.Count > 0 && attributeArguments[0].Value is byte[] attributeArray)
+            {
+                // Check the value of the Nullable attribute (1 for nullable, 2 for non-nullable)
+                return attributeArray[0] == 1;
+            }
+        }
+
+        // Fallback: Consider it non-nullable if no attribute is found
+        return false;
+    }
 }
