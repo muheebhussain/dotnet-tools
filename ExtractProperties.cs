@@ -16,19 +16,10 @@ class Program
                 string line;
                 bool isPropertyLine = false;
 
-                while ((line = reader.ReadLine()) != null)
+               while ((line = reader.ReadLine()) != null)
                 {
-                    // Check for a public property. This pattern assumes simple property declarations.
-                    if (Regex.IsMatch(line, @"^\s*public\s+(?!class)(?!static)(?!void)[^\s]+\s+[^\s]+\s*\{\s*get;.*set;\s*\}\s*$") && !line.Contains("virtual"))
-                    {
-                        isPropertyLine = true;
-                    }
-                    else
-                    {
-                        isPropertyLine = false;
-                    }
-
-                    if (isPropertyLine)
+                    // Updated check for a public property, excluding virtual properties
+                    if (Regex.IsMatch(line, @"^\s*public\s+((?!virtual).)*\s+[^\s]+\s*\{\s*get;.*set;\s*\}\s*$"))
                     {
                         extractedProperties.AppendLine(line);
                     }
