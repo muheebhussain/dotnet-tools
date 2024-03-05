@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -27,16 +26,17 @@ namespace YourNamespace
 
             foreach (var prop in properties)
             {
-                var typeName = prop.PropertyType.Name;
-                var propName = prop.Name;
-                
-                // Handling non-nullable strings to be nullable in the model
-                if (prop.PropertyType == typeof(string) && !prop.PropertyType.IsGenericType)
+                string typeName = prop.PropertyType.Name;
+                string propName = prop.Name;
+                string defaultValue = "";
+
+                // Adjust non-nullable string properties to have a default value of null!
+                if (prop.PropertyType == typeof(string))
                 {
-                    typeName = typeName + "?";
+                    defaultValue = " = null!";
                 }
 
-                classBuilder.AppendLine($"        public {typeName} {propName} {{ get; set; }}");
+                classBuilder.AppendLine($"        public {typeName} {propName} {{ get; set; }}{defaultValue}");
             }
 
             classBuilder.AppendLine("    }");
