@@ -36,24 +36,39 @@ namespace YourNamespace
             classBuilder.AppendLine($"    public class {modelName} : IModel");
             classBuilder.AppendLine("    {");
 
-           foreach (var prop in properties)
+          foreach (var prop in properties)
+{
+    Type propType = prop.PropertyType;
+    string typeName = propType switch
+    {
+        _ when propType == typeof(int) => "int",
+        _ when propType == typeof(string) => "string",
+        _ when propType == typeof(bool) => "bool",
+        _ when propType == typeof(double) => "double",
+        _ when propType == typeof(float) => "float",
+        _ when propType == typeof(decimal) => "decimal",
+        _ when propType == typeof(long) => "long",
+        _ when propType == typeof(DateTime) => "DateTime",
+        _ when propType.IsGenericType && propType.GetGenericTypeDefinition() == typeof(Nullable<>) => 
+            Nullable.GetUnderlyingType(propType) switch
             {
-                Type propType = prop.PropertyType;
-                string typeName = propType.IsGenericType && propType.GetGenericTypeDefinition() == typeof(Nullable<>)
-                                  ? Nullable.GetUnderlyingType(propType).Name + "?"
-                                  : propType.Name;
+                Type t when t == typeof(int) => "int?",
+                Type t when t == typeof(bool) => "bool?",
+                Type t when t == typeof(double) => "double?",
+                Type t when t == typeof(float) => "float?",
+                Type t when t == typeof(decimal) => "decimal?",
+                Type t when t == typeof(long) => "long?",
+                Type t when t == typeof(DateTime) => "DateTime?",
+                _ => "Nullable<" + Nullable.GetUnderlyingType(propType).Name.ToLower() + ">"
+            },
+        _ => propType.Name
+    };
 
-                if (propType.IsGenericType && typeof(IEnumerable<>).IsAssignableFrom(propType.GetGenericTypeDefinition()))
-                {
-                    Type genericTypeArgument = propType.GetGenericArguments()[0];
-                    typeName = $"IEnumerable<{genericTypeArgument.Name}>";
-                }
+    string propName = prop.Name;
+    string defaultValue = propType == typeof(string) ? " = null!;" : "";
 
-                string propName = prop.Name;
-                string defaultValue = propType == typeof(string) ? " = null!;" : "";
-
-                classBuilder.AppendLine($"        public {typeName} {propName} {{ get; set; }}{defaultValue}");
-            }
+    classBuilder.AppendLine($"        public {typeName} {propName} {{ get; set; }}{defaultValue}");
+}
 
             classBuilder.AppendLine("    }");
             classBuilder.AppendLine("}");
