@@ -43,3 +43,6 @@ export class PdfGeneratorComponent {
     });
   }
 }
+
+FROM mcr.microsoft.com/dotnet/aspnet:6.0
+RUN sed -i 's/@SECLEVEL=2/@SECLEVEL=1/g' /etc/ssl/openssl.cnf
