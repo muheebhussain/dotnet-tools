@@ -18,20 +18,22 @@ export class PdfGeneratorComponent {
 
     html2canvas(data, { scale: 1 }).then(canvas => {
       const contentDataURL = canvas.toDataURL('image/png');
-      let pdf = new jsPDF('l', 'mm', 'a4'); // Changes to landscape mode
+      let pdf = new jsPDF('l', 'mm', 'a4'); // Initialize jsPDF in landscape mode
       let pdfWidth = pdf.internal.pageSize.getWidth();
       let pdfHeight = pdf.internal.pageSize.getHeight();
-      let imgWidth = canvas.width * pdfHeight / canvas.height;
-      let imgHeight = pdfHeight;
-      let heightLeft = canvas.height * imgWidth / canvas.width;
 
+      let imgWidth = pdfWidth;
+      let imgHeight = canvas.height * pdfWidth / canvas.width;
       let position = 0;
 
+      // Add image to the first page
       pdf.addImage(contentDataURL, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pdfHeight;
+      
+      let heightLeft = imgHeight - pdfHeight;
 
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight; // Adjust position for landscape
+      // Add new pages if the content overflows
+      while (heightLeft > 0) {
+        position = -(imgHeight - heightLeft);
         pdf.addPage();
         pdf.addImage(contentDataURL, 'PNG', 0, position, imgWidth, imgHeight);
         heightLeft -= pdfHeight;
