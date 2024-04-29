@@ -1,36 +1,44 @@
 # Define the path to the solution file
 $solutionPath = "C:\Path\To\Your\Solution.sln"
 
-# Extract project details from the solution file
-$projects = Get-Content $solutionPath | Where-Object { $_ -match "\.csproj" } | ForEach-Object {
-    $start = $_.IndexOf('"') + 1
-    $end = $_.LastIndexOf('"')
-    $relativePath = $_.Substring($start, $end - $start)
-    $projectPath = Join-Path (Split-Path $solutionPath) $relativePath
+# Extract project paths from the solution file
+$projectPaths = (Get-Content $solutionPath | Where-Object { $_ -match "\.csproj" }) -replace '^.+=", "' -replace '".*$'
+
+# Define a list to hold project information
+$exeProjects = @()
+
+# Iterate over each project path
+foreach ($relativePath in $projectPaths) {
+    $fullPath = Join-Path (Split-Path $solutionPath) $relativePath
     $projectName = Split-Path $relativePath -Leaf
-    @{
-        Name = $projectName
-        Path = $projectPath
-        ProjectType = ''
-        References = @()
+
+    # Load the project file as XML
+    [xml]$projectXml = Get-Content $fullPath
+
+    # Check if the project's OutputType is 'Exe'
+    if ($projectXml.Project.PropertyGroup.OutputType -eq 'Exe') {
+        $references = @($projectXml.Project.ItemGroup.ProjectReference | ForEach-Object {
+            $refPath = $_.Include
+            $refName = [System.IO.Path]::GetFileNameWithoutExtension($refPath)
+            @{ Name = $refName; Path = $refPath }
+        })
+
+        # Add project details to the list
+        $exeProjects += @{
+            Name = $projectName
+            Path = $fullPath
+            References = $references
+        }
     }
 }
 
-# Load project details
-foreach ($project in $projects) {
-    [xml]$xmlContent = Get-Content $project.Path
-    $project.ProjectType = $xmlContent.Project.PropertyGroup.OutputType
-    $project.References = $xmlContent.Project.ItemGroup.Reference | Where-Object { $_.Include } | ForEach-Object { $_.Include }
-}
-
-# Display library projects in tabular format
-$libraryProjects = $projects | Where-Object { $_.ProjectType -eq 'Library' }
-$libraryProjects | Format-Table -Property Name, Path
-
-# Display executable projects and their references in tabular format
-$exeProjects = $projects | Where-Object { $_.ProjectType -eq 'Exe' }
+# Display the exe projects and their references
 foreach ($project in $exeProjects) {
     Write-Output "`nProject: $($project.Name)"
     Write-Output "Location: $($project.Path)"
-    $project.References | Format-Table -Property @{Label="Referenced Libraries"; Expression={$_}}
+    if ($project.References.Count -gt 0) {
+        $project.References | Format-Table -Property Name, Path
+    } else {
+        Write-Output "No references found."
+    }
 }
