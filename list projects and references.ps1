@@ -98,3 +98,130 @@ class Program
         pc.UnloadAllProjects();
     }
 }
+using System;
+using Microsoft.Build.Locator;
+using Microsoft.Build.Evaluation;
+using Microsoft.Build.Construction;
+using System.Linq;
+using System.Collections.Generic;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        // Register an instance of MSBuild
+        MSBuildLocator.RegisterDefaults();
+
+        // Specify the path to your solution file
+        string solutionPath = @"C:\Path\To\Your\Solution.sln";
+
+        // Load the solution file
+        var solutionFile = SolutionFile.Parse(solutionPath);
+        var projects = solutionFile.ProjectsInOrder;
+
+        // Use MSBuild to load each project
+        var pc = new ProjectCollection();
+        List<Project> exeProjects = new List<Project>();
+
+        foreach (var project in projects.Where(p => p.ProjectType == SolutionProjectType.KnownToBeMSBuildFormat))
+        {
+            var loadedProject = pc.LoadProject(project.AbsolutePath);
+            var outputType = loadedProject.GetProperty("OutputType")?.EvaluatedValue;
+            if (outputType == "Exe")
+            {
+                exeProjects.Add(loadedProject);
+            }
+        }
+
+        // Display executable projects and their references
+        foreach (var project in exeProjects)
+        {
+            Console.WriteLine($"Project: {project.GetPropertyValue("ProjectName")}");
+            Console.WriteLine($"Location: {project.FullPath}");
+            Console.WriteLine("References:");
+
+            var references = project.Items.Where(item => item.ItemType == "ProjectReference");
+            foreach (var reference in references)
+            {
+                Console.WriteLine($"  {reference.EvaluatedInclude}");
+            }
+
+            Console.WriteLine();
+        }
+
+        // Ensure to unload all projects
+        pc.UnloadAllProjects();
+    }
+}
+using System;
+using Microsoft.Build.Locator;
+using Microsoft.Build.Evaluation;
+using Microsoft.Build.Construction;
+using System.Linq;
+using System.Collections.Generic;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        // Register an instance of MSBuild
+        MSBuildLocator.RegisterDefaults();
+
+        // Specify the path to your solution file
+        string solutionPath = @"C:\Path\To\Your\Solution.sln";
+
+        // Load the solution file
+        var solutionFile = SolutionFile.Parse(solutionPath);
+        var projects = solutionFile.ProjectsInOrder;
+
+        // Use MSBuild to load each project
+        var pc = new ProjectCollection();
+        List<Project> exeProjects = new List<Project>();
+
+        foreach (var project in projects.Where(p => p.ProjectType == SolutionProjectType.KnownToBeMSBuildFormat))
+        {
+            var loadedProject = pc.LoadProject(project.AbsolutePath);
+            var outputType = loadedProject.GetProperty("OutputType")?.EvaluatedValue;
+            if (outputType == "Exe")
+            {
+                exeProjects.Add(loadedProject);
+            }
+        }
+
+        // Display executable projects and their references
+        foreach (var project in exeProjects)
+        {
+            Console.WriteLine($"Project: {project.GetPropertyValue("ProjectName")}");
+            Console.WriteLine($"Location: {project.FullPath}");
+            Console.WriteLine("References:");
+
+            var references = project.Items.Where(item => item.ItemType == "ProjectReference");
+            foreach (var reference in references)
+            {
+                Console.WriteLine($"  {reference.EvaluatedInclude}");
+            }
+
+            Console.WriteLine();
+        }
+
+        // Ensure to unload all projects
+        pc.UnloadAllProjects();
+    }
+}
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework> <!-- You can use net5.0, netcoreapp3.1, etc., depending on your environment -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Locator" Version="1.4.1" />
+    <PackageReference Include="Microsoft.Build" Version="17.0.0" />
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.0.0" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.0.0" />
+  </ItemGroup>
+
+</Project>
