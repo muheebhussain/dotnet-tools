@@ -1,0 +1,25 @@
+public class JobConfigurationManager
+{
+    private Dictionary<string, bool> jobLockRequirements;
+
+    public JobConfigurationManager()
+    {
+        jobLockRequirements = new Dictionary<string, bool>
+        {
+            // True means locking is required, false means no locking
+            {"LongRunningJob", true},
+            {"QuickJob", false},
+            {"AnotherLongRunningJob", true},
+            // Add all 20 jobs here with true or false as needed
+        };
+    }
+
+    public bool RequiresLock(string jobName)
+    {
+        if (jobLockRequirements.ContainsKey(jobName))
+        {
+            return jobLockRequirements[jobName];
+        }
+        return false; // default to no locking if job not found
+    }
+}

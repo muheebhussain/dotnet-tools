@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <AspNetCoreHostingModel>InProcess</AspNetCoreHostingModel>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Package for Hangfire -->
+    <PackageReference Include="Hangfire.Core" Version="1.7.25" />
+    <PackageReference Include="Hangfire.SqlServer" Version="1.7.25" />
+    <PackageReference Include="Hangfire.AspNetCore" Version="1.7.25" />
+
+    <!-- SQL Server Dependency for database interactions -->
+    <PackageReference Include="System.Data.SqlClient" Version="4.8.3" />
+
+    <!-- Additional packages might be necessary depending on your application needs -->
+  </ItemGroup>
+
+</Project>

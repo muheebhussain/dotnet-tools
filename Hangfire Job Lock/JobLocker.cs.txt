@@ -1,0 +1,77 @@
+using System;
+using System.Data.SqlClient;
+
+public class JobLocker
+{
+    private readonly string _connectionString;
+    private readonly JobConfigurationManager _configManager;
+
+    public JobLocker(string connectionString, JobConfigurationManager configManager)
+    {
+        _connectionString = connectionString;
+        _configManager = configManager;
+    }
+
+    public void ExecuteJob(string jobName, Action jobAction)
+    {
+        if (_configManager.RequiresLock(jobName))
+        {
+            if (AcquireLock(jobName))
+            {
+                try
+                {
+                    jobAction();
+                }
+                finally
+                {
+                    ReleaseLock(jobName);
+                }
+            }
+            else
+            {
+                Console.WriteLine($"{jobName} is already running.");
+            }
+        }
+        else
+        {
+            jobAction(); // Execute without lock
+        }
+    }
+
+    private bool AcquireLock(string jobName)
+    {
+        using (var connection = new SqlConnection(_connectionString))
+        {
+            connection.Open();
+            using (var transaction = connection.BeginTransaction())
+            {
+                var command = new SqlCommand(
+                    "UPDATE JobLocks SET IsRunning = 1, LastRun = GETDATE() WHERE JobName = @JobName AND IsRunning = 0",
+                    connection, transaction);
+                command.Parameters.AddWithValue("@JobName", jobName);
+
+                if (command.ExecuteNonQuery() > 0)
+                {
+                    transaction.Commit();
+                    return true;
+                }
+
+                transaction.Rollback();
+                return false;
+            }
+        }
+    }
+
+    private void ReleaseLock(string jobName)
+    {
+        using (var connection = new SqlConnection(_connectionString))
+        {
+            connection.Open();
+            var command = new SqlCommand(
+                "UPDATE JobLocks SET IsRunning = 0 WHERE JobName = @JobName",
+                connection);
+            command.Parameters.AddWithValue("@JobName", jobName);
+            command.ExecuteNonQuery();
+        }
+    }
+}

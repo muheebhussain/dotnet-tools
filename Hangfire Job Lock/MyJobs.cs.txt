@@ -1,0 +1,30 @@
+public class MyJobs
+{
+    private readonly JobLocker _locker;
+
+    public MyJobs(string connectionString)
+    {
+        var configManager = new JobConfigurationManager();
+        _locker = new JobLocker(connectionString, configManager);
+    }
+
+    public void LongRunningJob()
+    {
+        _locker.ExecuteJob("LongRunningJob", () =>
+        {
+            Console.WriteLine("Starting long-running job...");
+            System.Threading.Thread.Sleep(TimeSpan.FromMinutes(5)); // Simulating job execution
+            Console.WriteLine("Finished long-running job.");
+        });
+    }
+
+    public void QuickJob()
+    {
+        _locker.ExecuteJob("QuickJob", () =>
+        {
+            Console.WriteLine("Starting quick job...");
+            System.Threading.Thread.Sleep(TimeSpan.FromSeconds(30)); // Simulating quick job execution
+            Console.WriteLine("Finished quick job.");
+        });
+    }
+}
