@@ -148,3 +148,63 @@ class Program
         }
     }
 }
+public class ExcelReader
+{
+    public List<T> ReadExcelTemplate<T>(Stream excelStream, string templateName) where T : new()
+    {
+        if (!ExcelTemplateConfigurations.Templates.TryGetValue(templateName, out var columns))
+        {
+            throw new ArgumentException($"Template '{templateName}' is not defined.");
+        }
+
+        using var workbook = new XLWorkbook(excelStream);
+        var worksheet = workbook.Worksheet(1); // Assuming data is in the first worksheet
+        var headerRow = worksheet.Row(1).Cells().Select(c => c.Value.ToString()).ToList();
+        ValidateColumns(headerRow, columns.Select(c => c.Name).ToList());
+
+        var result = new List<T>();
+        var rows = worksheet.RangeUsed().RowsUsed().Skip(1); // Skip header row
+
+        foreach (var row in rows)
+        {
+            var obj = new T();
+            for (int col = 1; col <= columns.Count; col++)
+            {
+                var column = columns[col - 1];
+                var property = typeof(T).GetProperty(column.Name.Replace(" ", ""), BindingFlags.Public | BindingFlags.Instance);
+                if (property != null && property.CanWrite)
+                {
+                    property.SetValue(obj, ConvertCellValue(row.Cell(col).Value, column.Type));
+                }
+            }
+            result.Add(obj);
+        }
+
+        return result;
+    }
+
+    private void ValidateColumns(List<string> excelColumns, List<string> templateColumns)
+    {
+        var missingColumns = templateColumns.Except(excelColumns).ToList();
+        if (missingColumns.Any())
+        {
+            throw new ArgumentException($"The following columns are missing in the Excel file: {string.Join(", ", missingColumns)}");
+        }
+
+        var extraColumns = excelColumns.Except(templateColumns).ToList();
+        if (extraColumns.Any())
+        {
+            throw new ArgumentException($"The following columns in the Excel file are not defined in the template: {string.Join(", ", extraColumns)}");
+        }
+    }
+
+    private object ConvertCellValue(object value, Type targetType) => targetType switch
+    {
+        { } t when t == typeof(int) || t == typeof(int?) => value == null ? (object)null : Convert.ToInt32(value),
+        { } t when t == typeof(decimal) || t == typeof(decimal?) => value == null ? (object)null : Convert.ToDecimal(value),
+        { } t when t == typeof(double) || t == typeof(double?) => value == null ? (object)null : Convert.ToDouble(value),
+        { } t when t == typeof(DateTime) || t == typeof(DateTime?) => value == null ? (object)null : Convert.ToDateTime(value),
+        { } t when t == typeof(bool) || t == typeof(bool?) => value == null ? (object)null : Convert.ToBoolean(value),
+        _ => value?.ToString()
+    };
+}
