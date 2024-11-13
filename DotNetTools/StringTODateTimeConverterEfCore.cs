@@ -5,9 +5,22 @@ public class NullableStringToDateTimeConverter : ValueConverter<DateTime?, strin
 {
     public NullableStringToDateTimeConverter() 
         : base(
-            date => date.HasValue ? date.Value.ToString("yyyy-MM-dd") : null,  // Convert DateTime? to string
-            str => DateTime.TryParse(str, out var date) ? (DateTime?)date : null) // Convert string to DateTime?
+            date => date.HasValue ? date.Value.ToString("yyyy-MM-dd") : null,
+            str => ParseDate(str))
     {
+    }
+
+    private static DateTime? ParseDate(string str)
+    {
+        if (string.IsNullOrEmpty(str))
+        {
+            return null;
+        }
+        
+        return DateTime.TryParseExact(str, "yyyy-MM-dd", 
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) 
+            ? date 
+            : (DateTime?)null;
     }
 }
 using Microsoft.EntityFrameworkCore;
