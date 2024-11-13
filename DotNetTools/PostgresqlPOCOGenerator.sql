@@ -2,8 +2,14 @@ DO $$
 DECLARE 
     table_name text := 'role';  -- Replace with your table name
     result text := 'public class ' || initcap(table_name) || ' {' || chr(10);
+    column_name text;
+    ordinal_position int;
+    column_type text;
+    nullable_sign text;
+    attribute text;
+    max_length_attribute text;
 BEGIN
-    FOR row IN 
+    FOR column_name, ordinal_position, column_type, nullable_sign, attribute, max_length_attribute IN 
         SELECT 
             column_name,
             ordinal_position,
@@ -42,8 +48,8 @@ BEGIN
         ORDER BY ordinal_position
     LOOP
         result := result || chr(10) || 
-                  row.attribute || ' ' || row.max_length_attribute || chr(10) || 
-                  '    public ' || row.column_type || row.nullable_sign || ' ' || initcap(row.column_name) || ' { get; set; }' || chr(10);
+                  attribute || ' ' || max_length_attribute || chr(10) || 
+                  '    public ' || column_type || nullable_sign || ' ' || initcap(column_name) || ' { get; set; }' || chr(10);
     END LOOP;
 
     result := result || chr(10) || '}';
