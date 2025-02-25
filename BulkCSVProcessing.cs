@@ -303,3 +303,87 @@ public static class ProviderDealsProcessor
         }
     }
 }
+/// <summary>
+/// Reads FileB.csv and returns a dictionary of the best MeasureValue for each TradeId.
+/// Filters so that only rows with Category = "InventoryPosition" and IndicatorType = "Nominal" are considered.
+/// 
+/// Then applies the logic:
+///   - If IndicatorSubTypeCode = "settleDatePosition" and MeasureValue is non-null => prefer this
+///   - If "settleDatePosition" is null, use "OriginalTradeAmount"
+/// </summary>
+public static Dictionary<string, string> BuildMeasureValueDictionary(string fileBPath)
+{
+    // We'll store for each TradeId: (settleVal, originalVal)
+    var intermediate = new Dictionary<string, (string settleVal, string originalVal)>(StringComparer.OrdinalIgnoreCase);
+
+    using var reader = new StreamReader(fileBPath);
+    using var csv = new CsvHelper.CsvReader(reader, System.Globalization.CultureInfo.InvariantCulture);
+
+    while (csv.Read())
+    {
+        // Extract columns from FileB
+        var tradeId = csv.GetField<string>("TradeId")?.Trim();
+        var category = csv.GetField<string>("Category")?.Trim();
+        var indicatorType = csv.GetField<string>("IndicatorType")?.Trim();
+        var indicatorSubType = csv.GetField<string>("IndicatorSubTypeCode")?.Trim();
+        var measureValue = csv.GetField<string>("MeasureValue")?.Trim();
+
+        // Skip rows that do not match the required filters
+        // Category = "InventoryPosition" & IndicatorType = "Nominal"
+        if (!string.Equals(category, "InventoryPosition", StringComparison.OrdinalIgnoreCase)) 
+            continue;
+        if (!string.Equals(indicatorType, "Nominal", StringComparison.OrdinalIgnoreCase)) 
+            continue;
+
+        // Also skip rows with no TradeId
+        if (string.IsNullOrEmpty(tradeId))
+            continue;
+
+        // Retrieve or create the tuple for this TradeId
+        if (!intermediate.TryGetValue(tradeId, out var tuple))
+            tuple = (null, null);
+
+        // If this row is "settleDatePosition"
+        if (indicatorSubType.Equals("settleDatePosition", StringComparison.OrdinalIgnoreCase))
+        {
+            // If measureValue is non-empty, override settleVal
+            if (!string.IsNullOrWhiteSpace(measureValue))
+            {
+                tuple.settleVal = measureValue;
+            }
+            // If measureValue is empty, we do nothing here (we might rely on originalVal later)
+        }
+        else if (indicatorSubType.Equals("OriginalTradeAmount", StringComparison.OrdinalIgnoreCase))
+        {
+            // If measureValue is non-empty, store as potential fallback
+            if (!string.IsNullOrWhiteSpace(measureValue))
+            {
+                tuple.originalVal = measureValue;
+            }
+        }
+
+        intermediate[tradeId] = tuple;
+    }
+
+    // Now build the final dictionary with a single measureValue
+    var final = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    foreach (var kvp in intermediate)
+    {
+        var tradeId = kvp.Key;
+        var (settleVal, originalVal) = kvp.Value;
+
+        // If settleVal is non-empty => use it
+        if (!string.IsNullOrWhiteSpace(settleVal))
+        {
+            final[tradeId] = settleVal;
+        }
+        else
+        {
+            // else fallback to originalVal (could be null if none found)
+            final[tradeId] = originalVal;
+        }
+    }
+
+    return final;
+}
