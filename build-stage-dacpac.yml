@@ -1,0 +1,43 @@
+# .github/workflows/build‑and‑stage‑dacpac.yml
+name: Build & Stage DACPAC
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-stage:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v3
+        with: dotnet-version: 8.0.x
+
+      - name: Install sqlpackage
+        run: |
+          dotnet tool install --global dotnet-sqlpackage
+          echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
+
+      - name: Build DACPAC
+        run: dotnet build src/Database/MyDatabase.sqlproj -c Release
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Upload to Blob
+        run: |
+          az storage blob upload \
+            --account-name   ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+            --container-name ${{ secrets.AZURE_STORAGE_CONTAINER }} \
+            --name           "MyDatabase-${GITHUB_SHA:0:8}.dacpac" \
+            --file           ./src/Database/bin/Release/MyDatabase.dacpac
+
+      - name: Record blob name
+        run: echo "BLOB_NAME=MyDatabase-${GITHUB_SHA:0:8}.dacpac" >> $GITHUB_OUTPUT
