@@ -21,6 +21,23 @@ jobs:
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
+      # ─────────────────────────────────────────────
+      # OPTION B: Dynamically find the .sqlproj file
+      # ─────────────────────────────────────────────
+      - name: Locate KusoDatabase.sqlproj
+        id: find_sqlproj
+        run: |
+          SQLPROJ_PATH=$(find . -type f -name 'KusoDatabase.sqlproj' | head -n1)
+          echo "Found at: $SQLPROJ_PATH"
+          echo "SQLPROJ_PATH=$SQLPROJ_PATH" >> $GITHUB_ENV
+
+      - name: Restore & build SQL project (dynamic)
+        if: env.SQLPROJ_PATH != ''
+        run: |
+          dotnet restore "$SQLPROJ_PATH"
+          dotnet build   "$SQLPROJ_PATH" \
+            --configuration Release \
+            /p:NetCoreBuild=true
 
       - name: Restore & build SQL project
         run: |
