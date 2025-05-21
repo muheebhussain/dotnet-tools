@@ -52,6 +52,13 @@ jobs:
           echo "DACPAC_PATH=$(find Database -type f -path '*/bin/Release/*.dacpac' | head -n1)" \
             >> $GITHUB_ENV
 
+      - name: Install sqlpackage
+        run: |
+          dotnet new tool-manifest --force
+          dotnet tool install Microsoft.SqlPackage --version 170.0.94
+          echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
+      
+
       - name: Install sqlpackage as a local .NET tool
         run: |
           # initialize or overwrite tool manifest
