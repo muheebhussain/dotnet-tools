@@ -1,0 +1,67 @@
+name: Build & Deploy SQL Database Project (with sqlpackage as a nuget tool)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, linux]
+    env:
+      SQL_SERVER:   ${{ secrets.SQL_SERVER }}
+      SQL_DATABASE: ${{ secrets.SQL_DATABASE }}
+      SQL_USER:     ${{ secrets.SQL_USER }}
+      SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore & build SQL project
+        run: |
+          dotnet restore ./Database/MyDatabaseProject.sqlproj
+          dotnet build   ./Database/MyDatabaseProject.sqlproj \
+            --configuration Release \
+            /p:NetCoreBuild=true
+
+      - name: Locate generated DACPAC
+        id: find_dacpac
+        run: |
+          echo "DACPAC_PATH=$(find Database -type f -path '*/bin/Release/*.dacpac' | head -n1)" \
+            >> $GITHUB_ENV
+
+      - name: Install sqlpackage as a local .NET tool
+        run: |
+          # initialize or overwrite tool manifest
+          dotnet new tool-manifest --force
+          # install the CLI from NuGet
+          dotnet tool install Microsoft.SqlPackage --version 170.0.94
+          # ensure the tools folder is on PATH
+          echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
+        # you can bump the version if a newer one is released :contentReference[oaicite:0]{index=0}
+
+      - name: Deploy DACPAC to SQL Server
+        run: |
+          # now `sqlpackage` is on the PATH
+          sqlpackage \
+            /Action:Publish \
+            /SourceFile:"${{ env.DACPAC_PATH }}" \
+            /TargetServerName:"${{ env.SQL_SERVER }}" \
+            /TargetDatabaseName:"${{ env.SQL_DATABASE }}" \
+            /TargetUser:"${{ env.SQL_USER }}" \
+            /TargetPassword:"${{ env.SQL_PASSWORD }}" \
+            /p:DropObjectsNotInSource=True
+
+      - name: Quick verification
+        run: |
+          sqlcmd \
+            -S "${{ env.SQL_SERVER }}" \
+            -d "${{ env.SQL_DATABASE }}" \
+            -U "${{ env.SQL_USER }}" \
+            -P "${{ env.SQL_PASSWORD }}" \
+            -Q "SELECT COUNT(*) FROM sys.tables;"
