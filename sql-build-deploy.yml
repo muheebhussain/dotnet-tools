@@ -17,6 +17,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Bootstrap .NET 8.0.404
+        run: |
+          wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+          chmod +x dotnet-install.sh
+      
+          # install the SDK (includes runtime)
+          ./dotnet-install.sh \
+            --channel 8.0 \
+            --version 8.0.404 \
+            --install-dir $HOME/.dotnet
+
+          # make it easy to call
+          echo "export DOTNET_ROOT=$HOME/.dotnet" >> $GITHUB_ENV
+          echo "export PATH=$HOME/.dotnet:$PATH" >> $GITHUB_ENV
+
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v3
         with:
