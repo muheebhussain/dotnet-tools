@@ -1,0 +1,69 @@
+name: Validate SQL Project on Pull Request
+
+on:
+  pull_request:
+    branches: [ develop ]
+
+jobs:
+  validate-sql-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout merged PR commit
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Locate .sqlproj
+        id: find_sqlproj
+        run: |
+          SQLPROJ_PATH=$(find . -name '*.sqlproj' | head -n1)
+          echo "SQLPROJ_PATH=$SQLPROJ_PATH" >> $GITHUB_ENV
+
+      - name: Restore & Build SQL Project
+        run: |
+          dotnet restore "$SQLPROJ_PATH"
+          dotnet build "$SQLPROJ_PATH" --configuration Release
+
+      - name: Validate DACPAC for unresolved references
+        id: validate
+        run: |
+          DACPAC_PATH=$(find . -name "*.dacpac" | head -n1)
+          echo "DACPAC_PATH=$DACPAC_PATH" >> $GITHUB_ENV
+          
+          # Run validation and capture output
+          sqlpackage /Action:DriftReport /SourceFile:"$DACPAC_PATH" > validation_output.txt 2>&1
+          
+          cat validation_output.txt
+          
+          if grep -i "error" validation_output.txt; then
+            echo "VALIDATION_STATUS=❌ Failed" >> $GITHUB_ENV
+            echo "VALIDATION_RESULT<<EOF" >> $GITHUB_ENV
+            tail -n 30 validation_output.txt >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            exit 1
+          else
+            echo "VALIDATION_STATUS=✅ Passed" >> $GITHUB_ENV
+            echo "VALIDATION_RESULT<<EOF" >> $GITHUB_ENV
+            tail -n 30 validation_output.txt >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          fi
+
+      - name: Post PR Comment with Validation Results
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body \
+          "**SQL Validation Result**: ${{ env.VALIDATION_STATUS }}
+
+\`\`\`
+${{ env.VALIDATION_RESULT }}
+\`\`\`
+"
+
