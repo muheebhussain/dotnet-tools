@@ -78,107 +78,97 @@ on:
       - develop
 
 jobs:
-
   validate-sql-build:
     name: Validate SQL‑Project (unresolved references)
     runs-on: ubuntu-latest
 
     env:
-      # Change to match your .sqlproj filename
       DATABASE_PROJECT_NAME: "TransversalDB"
-      # Pin to whichever .NET you need
       DOTNET_VERSION: "8.0.x"
 
     steps:
-      # 1) Check out the “merge commit” for this PR
+      # 1) Checkout the “merge commit” for this PR
       - name: Checkout merged PR commit
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
 
-      # 2) Install the .NET SDK
+      # 2) Install .NET SDK
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # 3) Find your .sqlproj in the repo (so we can build it)
+      # 3) Find your .sqlproj
       - name: Locate ${{ env.DATABASE_PROJECT_NAME }}.sqlproj
         id: find_sqlproj
         run: |
           SQLPROJ_PATH=$(find . -type f -name "${DATABASE_PROJECT_NAME}.sqlproj" | head -n1)
           if [[ -z "$SQLPROJ_PATH" ]]; then
-            echo "❌ Could not find ${DATABASE_PROJECT_NAME}.sqlproj in the workspace!"
+            echo "❌ Could not find ${DATABASE_PROJECT_NAME}.sqlproj!"
             exit 1
           fi
           echo "SQLPROJ_PATH=$SQLPROJ_PATH" >> "$GITHUB_ENV"
-          echo "Found .sqlproj at: $SQLPROJ_PATH"
 
-      # 4) Restore & Build so that any SQL71561 warnings → errors, 
-      #    and also produce a build‐log at bin/Release/log.xml
-      - name: Restore & Build (fail if unresolved references)
+      # 4) Restore + Build (fail if any SQL71561 unresolved references)
+      - name: Restore & Build (fail on missing references)
         id: build
         run: |
           PROJECT_DIR=$(dirname "$SQLPROJ_PATH")
           LOGFILE="$PROJECT_DIR/bin/Release/log.xml"
-
-          # Make sure the directory exists (MSBuild will create bin/Release 
-          #  if necessary, but we create it ourselves to be sure)
           mkdir -p "$PROJECT_DIR/bin/Release"
 
           echo "→ Restoring project..."
           dotnet restore "$SQLPROJ_PATH"
 
-          echo "→ Building project (unresolved references turn to errors)..."
+          echo "→ Building project (/p:AllowUnresolvedReferences=false)"
           dotnet build "$SQLPROJ_PATH" \
             --configuration Release \
             /p:NetCoreBuild=true \
             /p:AllowUnresolvedReferences=false \
             /flp:logfile="$LOGFILE";verbosity=detailed
 
-          # If MSBuild returns exit code 1 due to SQL71561, then this step fails automatically.
-          # If it succeeds, the LOGFILE now contains a full XML log of warnings/errors for us to grep.
         shell: bash
 
       #
-      # 5) Post a PR comment. 
-      #    We must do this “always()” so that—even if the build fails—we still comment.
+      # 5) Authenticate gh CLI (even if build failed!)
       #
       - name: Authenticate GitHub CLI
         if: always()
         env:
           GH_TOKEN: ${{ secrets.USF_DB_PROJECTS_GIT_PAT_TOKEN }}
         run: |
-          # Feed the PAT into gh so gh pr comment is authenticated.
           echo "${GH_TOKEN}" | gh auth login --with-token
 
+      #
+      # 6) Post a comment. Always runs, so we see a comment on pass or fail.
+      #
       - name: Post PR Comment with Build Results
         if: always()
         run: |
           PROJECT_DIR=$(dirname "$SQLPROJ_PATH")
           LOGFILE="$PROJECT_DIR/bin/Release/log.xml"
 
+          #
+          # Construct the BODY text
+          #
           if [[ "${{ steps.find_sqlproj.outcome }}" != "success" ]]; then
             BODY="*SQL Validation*: ❌ Could not locate ${DATABASE_PROJECT_NAME}.sqlproj."
           elif [[ "${{ steps.build.outcome }}" == "success" ]]; then
             BODY="*SQL Validation*: ✅ No unresolved references; build succeeded."
           else
-            # Build failed. Let’s see if it was due to SQL71561 or something else.
             if [[ -f "$LOGFILE" ]]; then
-              # Grep for SQL71561 (unresolved‐reference) in the MSBuild log:
-              ERR_LINES=$(grep -‎i "SQL71561" "$LOGFILE" || true)
+              ERR_LINES=$(grep -i "SQL71561" "$LOGFILE" || true)
               if [[ -z "$ERR_LINES" ]]; then
-                # Build failed for some other reason (e.g. compile error). Just show last 30 lines of the log.
                 PREVIEW=$(tail -n 30 "$LOGFILE")
                 BODY=$(
                   printf "%s\n\n" \
-                    "*SQL Validation*: ❌ Build failed (not a SQL71561‐reference). See snapshot:" \
+                    "*SQL Validation*: ❌ Build failed (not a SQL71561‐reference). See below:" \
                     "xml"
                   printf "%s\n" "$PREVIEW"
                   printf ""
                 )
               else
-                # We definitely saw one or more “SQL71561” entries
                 PREVIEW=$(echo "$ERR_LINES" | head -n 30)
                 BODY=$(
                   printf "%s\n\n" \
@@ -189,11 +179,14 @@ jobs:
                 )
               fi
             else
-              # No log file at all! (That shouldn’t happen if the build step ran MSBuild 
-              #  with /flp:logfile, but just in case…)
               BODY="*SQL Validation*: ❌ Build failed and no log was generated."
             fi
           fi
 
-          # Finally, post the comment on the PR
-          gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
+          #
+          # Dump BODY to a temp file and then do --body-file
+          #
+          echo "$BODY" > pr-comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file pr-comment.md
+        shell: bash
+
