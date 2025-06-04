@@ -66,4 +66,90 @@ jobs:
 ${{ env.VALIDATION_RESULT }}
 \`\`\`
 "
+## V2
+#
+# .github/workflows/validate-sql-on-pr.yml
+#
+name: "Validate SQL Project on PR"
 
+on:
+  pull_request:
+    branches:
+      - develop
+
+jobs:
+  validate-sql-build:
+    name: Validate SQL‑Project (unresolved references)
+    runs-on: ubuntu-latest
+
+    env:
+      # Change this to whatever your .sqlproj is actually called
+      DATABASE_PROJECT_NAME: "TransversalDB"
+      # Pin to your desired .NET SDK version
+      DOTNET_VERSION: "8.0.x"
+
+    steps:
+      # 1) Get the “merge commit” for this PR so we validate exactly what
+      #    would end up in develop if the PR were merged.
+      - name: Checkout merged PR commit
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+
+      # 2) Install the .NET SDK
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # 3) Find your .sqlproj in the repo
+      - name: Locate ${{ env.DATABASE_PROJECT_NAME }}.sqlproj
+        id: find_sqlproj
+        run: |
+          SQLPROJ_PATH=$(find . -type f -name "${DATABASE_PROJECT_NAME}.sqlproj" | head -n1)
+          if [[ -z "$SQLPROJ_PATH" ]]; then
+            echo "❌ Could not find ${DATABASE_PROJECT_NAME}.sqlproj; aborting."
+            exit 1
+          fi
+          echo "SQLPROJ_PATH=$SQLPROJ_PATH" >> "$GITHUB_ENV"
+
+      # 4) Restore and build, failing if any reference is unresolved
+      - name: Restore & Build (fail on missing references)
+        id: build
+        run: |
+          dotnet restore "$SQLPROJ_PATH"
+          dotnet build "$SQLPROJ_PATH" \
+            --configuration Release \
+            /p:NetCoreBuild=true \
+            /p:AllowUnresolvedReferences=false
+
+      #
+      # 5) Post a PR comment with “Passed” or “Failed.” Even if the build fails,
+      #    we still want to leave a comment saying which errors popped up.
+      #
+      - name: Authenticate GitHub CLI
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.USF_DB_PROJECTS_GIT_PAT_TOKEN }}
+        run: |
+          echo "${GH_TOKEN}" | gh auth login --with-token
+
+      - name: Post PR Comment with Build Results
+        if: always()
+        run: |
+          if [[ "${{ steps.find_sqlproj.outcome }}" != "success" ]]; then
+            BODY="*SQL Validation*: ❌ Could not locate .sqlproj."
+          elif [[ "${{ steps.build.outcome }}" != "success" ]]; then
+            BODY=$(
+              printf "%s\n\n" "*SQL Validation*: ❌ Build failed due to unresolved references."
+              printf "bash\n"
+              # Grep for the typical "SQL71561: Unresolved reference" lines
+              grep -‎i "SQL71561" "$(dirname "$SQLPROJ_PATH")/bin/Release/log.xml" || \
+                echo "(Could not find SQL71561 errors in the log.)"
+              printf "\n"
+            )
+          else
+            BODY="*SQL Validation*: ✅ All references resolved; build succeeded."
+          fi
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
