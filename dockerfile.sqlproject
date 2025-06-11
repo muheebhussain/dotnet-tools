@@ -1,0 +1,35 @@
+# Stage 1: build the .sqlproj and produce the .dacpac
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# copy only project files to leverage Docker cache
+COPY MyDatabase/MyDatabase.csproj MyDatabase/
+RUN dotnet restore MyDatabase/MyDatabase.csproj
+
+# copy the rest and build
+COPY MyDatabase/ MyDatabase/
+RUN dotnet build MyDatabase/MyDatabase.csproj \
+    --configuration Release \
+    -o /app/build
+
+# Stage 2: runtime image with sqlpackage installed via dotnet tool
+FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
+WORKDIR /app
+
+# copy the built dacpac
+COPY --from=build /app/build/*.dacpac ./MyDatabase.dacpac
+
+# install Microsoft.SqlPackage as a global tool
+RUN dotnet tool install --global Microsoft.SqlPackage \
+ && echo "Adding dotnet tools to PATH" \
+ && export DOTNET_TOOLS="/root/.dotnet/tools" \
+ && ln -s "$DOTNET_TOOLS/sqlpackage" /usr/local/bin/sqlpackage
+
+# ensure the tools path is in PATH for future commands
+ENV PATH="$PATH:/root/.dotnet/tools"
+
+# copy entrypoint
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+ENTRYPOINT ["./entrypoint.sh"]
