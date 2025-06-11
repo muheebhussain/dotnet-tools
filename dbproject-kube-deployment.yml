@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dacpac-deployer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dacpac-deployer
+  template:
+    metadata:
+      labels:
+        app: dacpac-deployer
+    spec:
+      # (set up your CSI–KeyVault or pod identity here)
+      containers:
+      - name: deployer
+        image: registry.example.com/sql-dacpac-deployer:{{ .Values.imageTag }}
+        env:
+        - name: SQL_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: sql-conn-secret
+              key: connectionString
+        - name: DACPAC_FILE
+          value: "{{ .Values.dacpacFile }}"
+        - name: SQLPACKAGE_ARGS
+          value: "{{ .Values.sqlpackageArgs }}"
+        - name: MAX_RETRIES
+          value: "{{ .Values.maxRetries }}"
+        - name: RETRY_DELAY
+          value: "{{ .Values.retryDelay }}"
