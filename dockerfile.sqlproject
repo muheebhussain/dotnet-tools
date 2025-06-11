@@ -19,7 +19,7 @@ WORKDIR /app
 # copy the built dacpac
 COPY --from=build /app/build/*.dacpac ./MyDatabase.dacpac
 
-# install Microsoft.SqlPackage as a global tool
+# install Microsoft.SqlPackage as a global toola
 RUN dotnet tool install --global Microsoft.SqlPackage \
  && echo "Adding dotnet tools to PATH" \
  && export DOTNET_TOOLS="/root/.dotnet/tools" \
@@ -33,3 +33,31 @@ COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 ENTRYPOINT ["./entrypoint.sh"]
+
+
+
+#***********************
+FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
+WORKDIR /app
+
+# copy the built DACPAC from the build stage
+COPY --from=build /app/build/*.dacpac ./MyDatabase.dacpac
+
+# install the SqlPackage global tool
+RUN dotnet tool install --global Microsoft.SqlPackage \
+ && echo "Adding dotnet tools to PATH" \
+ && ln -s /root/.dotnet/tools/sqlpackage /usr/local/bin/sqlpackage
+
+# ──────────────── COPY ENTRYPOINT ────────────────
+# brings your script into the container
+COPY entrypoint.sh /app/entrypoint.sh
+
+# make it executable
+RUN chmod +x /app/entrypoint.sh
+
+# ensure the dotnet tools folder is in PATH
+ENV PATH="$PATH:/root/.dotnet/tools"
+
+# run your entrypoint on container start
+ENTRYPOINT ["/app/entrypoint.sh"]
+
