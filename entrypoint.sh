@@ -1,48 +1,38 @@
 #!/usr/bin/env bash
-# entrypoint.sh — deploy a DACPAC to Azure SQL with best practices
+# deploy‐entrypoint.sh — generic DACPAC publisher
 
 set -euo pipefail
 IFS=$'\n\t'
 
-# --- Configuration (can be overridden via env) ---
-: "${SQL_CONNECTION_STRING:?Environment variable SQL_CONNECTION_STRING must be set}"
-DACPAC_FILE="${DACPAC_FILE:-MyDatabase.dacpac}"
-# Additional sqlpackage parameters, e.g. "/p:DropObjectsNotInSource=false"
+# required env
+: "${SQL_CONNECTION_STRING:?Env SQL_CONNECTION_STRING is required}"
+: "${DACPAC_FILE:?Env DACPAC_FILE is required}"
+
+# optional env with defaults
 SQLPACKAGE_ARGS="${SQLPACKAGE_ARGS:-/p:DropObjectsNotInSource=false}"
-MAX_RETRIES="${MAX_RETRIES:-5}"
-RETRY_DELAY="${RETRY_DELAY:-10}"  # seconds
+MAX_RETRIES="${MAX_RETRIES:-3}"
+RETRY_DELAY="${RETRY_DELAY:-5}"
 
-# --- Logging helper ---
-log() {
-  echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] $*"
-}
+log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
-# --- Validate DACPAC exists ---
 if [[ ! -f "$DACPAC_FILE" ]]; then
-  log "ERROR: DACPAC file '$DACPAC_FILE' not found."
+  log "ERROR: '$DACPAC_FILE' not found"
   exit 1
 fi
 
-# --- Deployment loop with retry on transient failures ---
-attempt=1
-while true; do
-  log "Attempt $attempt/$MAX_RETRIES: publishing '$DACPAC_FILE' to Azure SQL"
+for ((i=1; i<=MAX_RETRIES; i++)); do
+  log "Publish attempt $i of $MAX_RETRIES..."
   if sqlpackage \
-      /Action:Publish \
-      /SourceFile:"$DACPAC_FILE" \
-      /TargetConnectionString:"$SQL_CONNECTION_STRING" \
-      $SQLPACKAGE_ARGS
-  then
-    log "SUCCESS: DACPAC deployed."
+       /Action:Publish \
+       /SourceFile:"$DACPAC_FILE" \
+       /TargetConnectionString:"$SQL_CONNECTION_STRING" \
+       $SQLPACKAGE_ARGS; then
+    log "SUCCESS"
     exit 0
   else
-    log "WARN: Deployment attempt $attempt failed."
-    if (( attempt >= MAX_RETRIES )); then
-      log "ERROR: Exceeded max retries ($MAX_RETRIES). Aborting."
-      exit 1
-    fi
-    attempt=$(( attempt + 1 ))
-    log "Retrying in $RETRY_DELAY seconds..."
-    sleep "$RETRY_DELAY"
+    log "FAILED (attempt $i)"
+    [[ $i -lt MAX_RETRIES ]] && { log "Retrying in ${RETRY_DELAY}s…"; sleep $RETRY_DELAY; } || break
   fi
 done
+
+log "ERROR: all retries exhausted"; exit 1
