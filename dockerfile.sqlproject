@@ -1,59 +1,48 @@
-# ─── Build Stage ───────────────────────────────────────────────────────
-ARG DOTNET_SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:8.0-alpine
-FROM ${DOTNET_SDK_IMAGE} AS build
-
-# overridable build-time args
-ARG PROJECT_PATH=src/Database/Database.sqlproj
-ARG OUTPUT_DIR=/app/build
-
+# ─── Stage 1: build the .sqlproj & produce a DACPAC ─────────────
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS builder
 WORKDIR /src
 
-# 1) Install CA certs so HTTPS (nuget.org or private feeds) works
-RUN apk update \
- && apk add --no-cache ca-certificates \
- && update-ca-certificates
+# install certs for nuget HTTPS
+RUN apk add --no-cache ca-certificates
 
-# 2) Copy your private certs (if you have any) into the trust store
-# COPY certs/*.crt /usr/local/share/ca-certificates/
-# RUN update-ca-certificates
-
-# 3) Copy only what you need to restore
+# copy only project & nuget.config for cache-friendly restore
+ARG PROJECT_PATH=src/Database/Database.sqlproj
 COPY ${PROJECT_PATH%/*}/nuget.config /tmp/nuget.config
-COPY ${PROJECT_PATH%/*}/*.sqlproj       ${PROJECT_PATH%/*}/
+COPY ${PROJECT_PATH%/*}/*.sqlproj ${PROJECT_PATH%/*}/
+RUN dotnet restore "$PROJECT_PATH" --configfile /tmp/nuget.config
 
-# 4) Restore
-RUN dotnet restore "${PROJECT_PATH}" --configfile /tmp/nuget.config
-
-# 5) Copy everything else & build
+# build
 COPY . .
-RUN dotnet build "${PROJECT_PATH}" \
-    --configuration Release \
-    --output ${OUTPUT_DIR}
+ARG OUTPUT_DIR=/src/out
+RUN dotnet build "$PROJECT_PATH" -c Release -o $OUTPUT_DIR
 
 
-# ─── Runtime Stage ─────────────────────────────────────────────────────
-FROM ${DOTNET_SDK_IMAGE} AS runtime
-WORKDIR /app
+# ─── Stage 2: extract sqlpackage from SDK ───────────────────────
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS tools
+WORKDIR /tools
 
-# 6) Re-install CA certs here, too (for any HTTPS calls at runtime)
-RUN apk update \
- && apk add --no-cache ca-certificates \
- && update-ca-certificates
+# reuse the same nuget.config
+COPY --from=builder /tmp/nuget.config /tmp/nuget.config
 
-# 7) Pull in the built DACPAC
-ARG DACPAC_NAME=Database.dacpac
-COPY --from=build ${OUTPUT_DIR}/${DACPAC_NAME} ./
-
-# 8) Install sqlpackage as a global tool via your nuget.config
-COPY --from=build /tmp/nuget.config /tmp/nuget.config
 RUN dotnet tool install --global Microsoft.SqlPackage \
       --configfile /tmp/nuget.config \
-    && ln -s /root/.dotnet/tools/sqlpackage /usr/local/bin/sqlpackage
+ && cp /root/.dotnet/tools/sqlpackage /usr/local/bin/sqlpackage
 
-ENV PATH="$PATH:/root/.dotnet/tools"
 
-# 9) Copy & enable your entrypoint
+# ─── Stage 3: final runtime only + sqlpackage ───────────────────
+FROM mcr.microsoft.com/dotnet/runtime:8.0-alpine AS runtime
+WORKDIR /app
+
+# install certs if needed at runtime
+RUN apk add --no-cache ca-certificates
+
+# pull in just the DACPAC + sqlpackage binary
+ARG DACPAC_NAME=Database.dacpac
+COPY --from=builder /src/out/${DACPAC_NAME}     ./db.dacpac
+COPY --from=tools   /usr/local/bin/sqlpackage   /usr/local/bin/sqlpackage
+
+# entrypoint
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"]
