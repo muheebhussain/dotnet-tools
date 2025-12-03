@@ -146,3 +146,52 @@ SET IDENTITY_INSERT dbo.archival_table_configuration OFF;
 SELECT id, name, is_active, keep_last_eod FROM dbo.archival_table_retention_policy WHERE id = 3;
 SELECT id, name, azure_policy_tag, external_archive_days FROM dbo.archival_file_lifecycle_policy WHERE id = 4;
 SELECT id, database_name, table_name, table_retention_policy_id, file_lifecycle_policy_id FROM dbo.archival_table_configuration WHERE id = 30;
+
+
+-- register storage-account name used by BlobStorageOptions in appsettings.json (no DB operation)
+
+-- table lifecycle/retention should already exist; assume ids:
+--   archival_file_lifecycle_policy.id = 3 (external-policy)
+--   archival_table_retention_policy.id = 2 (example)
+
+INSERT INTO dbo.archival_table_configuration
+(database_name, schema_name, table_name, as_of_date_column, export_mode,
+ storage_account_name, container_name, archive_path_template, discovery_path_prefix,
+ table_retention_policy_id, file_lifecycle_policy_id, is_active, delete_from_source, created_at_et, created_by)
+VALUES
+('TestDb', 'dbo', 'allocationsummary_external', NULL, 'External',
+ 'myStorageAccount', 'app', '/{db}/{schema}/{table}/{yyyy}/{MM}/{dd}', 
+ 'file-output/modules/sgas/15c3-3/output/allocationsummary/2023-08-31/',
+ 2, 3, 1, 0, SYSUTCDATETIME(), 'seed');
+
+
+private static (DateTime? asOfDate, DateType? dateType) ParseDateFromPath(string blobPath)
+{
+    var parts = blobPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+
+    for (int i = 0; i < parts.Length; i++)
+    {
+        // case 1: three segments yyyy / MM / dd
+        if (i + 2 < parts.Length &&
+            parts[i].Length == 4 && parts[i + 1].Length == 2 && parts[i + 2].Length == 2 &&
+            int.TryParse(parts[i], out var y) &&
+            int.TryParse(parts[i + 1], out var m) &&
+            int.TryParse(parts[i + 2], out var d))
+        {
+            try { return (new DateTime(y, m, d), DateType.EXT); } catch { }
+        }
+
+        // case 2: single segment like yyyy-MM-dd
+        var seg = parts[i];
+        if (seg.Length == 10 && seg[4] == '-' && seg[7] == '-')
+        {
+            if (DateTime.TryParseExact(seg, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var dt))
+                return (dt, DateType.EXT);
+        }
+
+        // case 3: try extract yyyyMMdd or yyyy_MM_dd in filename (optional)
+        // add more patterns here as needed
+    }
+
+    return (null, null);
+}
