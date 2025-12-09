@@ -12,7 +12,8 @@ using System.Threading.Tasks;
 using ArchivalSystem.Application.Models;
 using Azure;
 
-private static async Task WriteRowGroupAsync(ParquetWriter parquetWriter, List<DataField> fields, List<List<object?>> columnBuffers, CancellationToken ct)
+private static async Task WriteRowGroupAsync(ParquetWriter parquetWriter, List<DataField> fields,
+    List<List<object?>> columnBuffers, CancellationToken ct)
 {
     using var rowGroup = parquetWriter.CreateRowGroup();
 
@@ -21,60 +22,10 @@ private static async Task WriteRowGroupAsync(ParquetWriter parquetWriter, List<D
         var field = fields[i];
         var buffer = columnBuffers[i];
 
-        // Build a typed array matching the field.ClrType (handles nullable types).
-        // Parquet.NET requires the array element type to match DataField.ClrType (e.g. DateTime?[] for DataField<DateTime?>).
-        var clrType = field.ClrType;
-        var elementType = clrType; // might be Nullable<T> for nullable fields
-        var arr = Array.CreateInstance(elementType, buffer.Count);
+        // Convert buffered values to object?[] then produce a strongly-typed DataColumn
+        var columnData = buffer.ToArray();
+        var dataColumn = GetColumn(field, columnData);
 
-        var underlying = Nullable.GetUnderlyingType(elementType) ?? elementType;
-
-        for (int r = 0; r < buffer.Count; r++)
-        {
-            var v = buffer[r];
-            if (v == null)
-            {
-                // For nullable value types and reference types this sets a null/default entry.
-                arr.SetValue(null, r);
-                continue;
-            }
-
-            // Special-case common conversions to avoid invalid casts
-            try
-            {
-                if (underlying == typeof(string))
-                {
-                    // GUIDs and other types should be stringified
-                    if (v is Guid g) arr.SetValue(g.ToString(), r);
-                    else arr.SetValue(Convert.ToString(v), r);
-                }
-                else if (underlying == typeof(byte[]))
-                {
-                    if (v is byte[] b) arr.SetValue(b, r);
-                    else throw new InvalidCastException($"Cannot convert value of type {v.GetType()} to byte[] for field '{field.Name}'.");
-                }
-                else if (underlying == typeof(Guid))
-                {
-                    // Try to convert guid-like values
-                    if (v is Guid gg) arr.SetValue(gg, r);
-                    else arr.SetValue(Guid.Parse(Convert.ToString(v)!), r);
-                }
-                else
-                {
-                    // Numeric / datetime / bool etc.
-                    // Convert.ChangeType works for IConvertible types (int, long, double, DateTime, bool, decimal, ...)
-                    var converted = Convert.ChangeType(v, underlying);
-                    arr.SetValue(converted, r);
-                }
-            }
-            catch (Exception ex)
-            {
-                // Add contextual information to help debugging type mismatches
-                throw new InvalidOperationException($"Failed converting column '{field.Name}' value at row {r} (value type: {(v == null ? "null" : v.GetType().ToString())}) to target CLR type {elementType}.", ex);
-            }
-        }
-
-        var dataColumn = new Parquet.Data.DataColumn(field, arr);
         await rowGroup.WriteColumnAsync(dataColumn, ct).ConfigureAwait(false);
     }
 }
