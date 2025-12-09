@@ -12,6 +12,24 @@ using System.Threading.Tasks;
 using ArchivalSystem.Application.Models;
 using Azure;
 
+private static async Task WriteRowGroupAsync(ParquetWriter parquetWriter, List<DataField> fields, List<List<object?>> columnBuffers, CancellationToken ct)
+{
+    using var rowGroup = parquetWriter.CreateRowGroup();
+
+    for (int i = 0; i < fields.Count; i++)
+    {
+        var field = fields[i];
+        var buffer = columnBuffers[i];
+
+        // Convert to object?[] to avoid CLR typed-array mismatches (nullable vs non-nullable)
+        // Parquet.NET accepts object arrays and will handle definition levels / nulls.
+        var arr = buffer.ToArray(); // object?[]
+
+        var dataColumn = new Parquet.Data.DataColumn(field, arr);
+        await rowGroup.WriteColumnAsync(dataColumn, ct).ConfigureAwait(false);
+    }
+}
+
 namespace ArchivalSystem.Infrastructure
 {
     public sealed class ArchivalFileLifecycleEnforcer(
