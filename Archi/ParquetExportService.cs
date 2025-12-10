@@ -1,66 +1,52 @@
 ﻿using ArchivalSystem.Application.Interfaces;
 using ArchivalSystem.Application.Models;
-using ArchivalSystem.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Parquet;
 using Parquet.Schema;
 using System.Data;
+using System.Diagnostics;
 
 namespace ArchivalSystem.Infrastructure;
 
 /// <summary>
 /// Streams Parquet parts directly from the source database.
-/// - Reads rows using SequentialAccess to avoid provider buffering large columns.
-/// - Writes row-groups sized by approximate bytes (target ~8MB) to balance memory and compression.
-/// - Produces parts of up to maxRowsPerPart rows; the writer callback is invoked synchronously during uploadPartAsync.
+/// Producer/consumer with spill-to-disk for parts (keeps memory bounded on AKS).
+/// Logs per-part metrics for telemetry.
 /// </summary>
-public class ParquetExportService(IConfiguration configuration) : IParquetExportService
+public class ParquetExportService : IParquetExportService
 {
-    private readonly IConfiguration _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+    private readonly IConfiguration _configuration;
+    private readonly ILogger<ParquetExportService> _logger;
 
     // Target bytes per parquet row-group (tunable). 8 MiB is a reasonable default.
     private const int RowGroupTargetBytes = 8 * 1024 * 1024;
 
-    public async Task<ParquetExportMetrics> ExportTableToStreamAsync(
-        string databaseName,
-        string schemaName,
-        string tableName,
-        string asOfDateColumn,
-        DateTime asOfDate,
-        Stream output,
-        CancellationToken ct = default)
+    // Default memory threshold before spilling a part to disk (16 MiB).
+    private const int DefaultSpillThresholdBytes = 16 * 1024 * 1024;
+
+    // Degree of parallelism for concurrent uploads; populated from configuration (BlobStorageOptions.DegreeOfParallelism) when available.
+    private readonly int _uploadDegreeOfParallelism;
+
+    public ParquetExportService(IConfiguration configuration, ILogger<ParquetExportService> logger)
+        : this(configuration, 4, logger)
+    { }
+
+    public ParquetExportService(IConfiguration configuration, int fallbackUploadDegree, ILogger<ParquetExportService> logger)
     {
-        if (output == null) throw new ArgumentNullException(nameof(output));
-        var parts = await ExportTableToPartsAsync(
-            databaseName, schemaName, tableName, asOfDateColumn, asOfDate,
-            async (ix, writer, token) =>
-            {
-                // For a single-stream export, call writer with the same output stream
-                await writer(output, token).ConfigureAwait(false);
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-                // After writer returns, we cannot get ETag/length here. Return a minimal ArchivalBlobInfo with size if possible.
-                return new ArchivalBlobInfo { StorageAccountName = string.Empty, ContainerName = string.Empty, BlobPath = string.Empty, ContentLength = output.CanSeek ? output.Length : -1 };
-            },
-            maxRowsPerPart: int.MaxValue, // no parting; let writer stream all rows
-            ct: ct);
-
-        // Aggregate metrics
-        long rows = 0, size = 0;
-        int cols = 0;
-        foreach (var p in parts)
+        try
         {
-            rows += p.Metrics?.RowCount ?? 0;
-            size += p.Metrics?.SizeBytes ?? 0;
-            cols = p.Metrics?.ColumnCount ?? cols;
+            var bs = _configuration.GetSection(nameof(BlobStorageOptions)).Get<BlobStorageOptions>();
+            _uploadDegreeOfParallelism = (bs?.DegreeOfParallelism > 0) ? bs.DegreeOfParallelism : Math.Max(1, fallbackUploadDegree);
         }
-
-        return new ParquetExportMetrics
+        catch
         {
-            RowCount = rows,
-            ColumnCount = cols,
-            SizeBytes = size
-        };
+            _uploadDegreeOfParallelism = Math.Max(1, fallbackUploadDegree);
+        }
     }
 
     public async Task<IReadOnlyList<ParquetExportPartResult>> ExportTableToPartsAsync(
@@ -70,7 +56,7 @@ public class ParquetExportService(IConfiguration configuration) : IParquetExport
         string asOfDateColumn,
         DateTime asOfDate,
         Func<int, Func<Stream, CancellationToken, Task>, CancellationToken, Task<ArchivalBlobInfo>> uploadPartAsync,
-        int maxRowsPerPart = 250_000,
+        int maxRowsPerPart = 50_000,
         CancellationToken ct = default)
     {
         if (uploadPartAsync == null) throw new ArgumentNullException(nameof(uploadPartAsync));
@@ -83,16 +69,18 @@ public class ParquetExportService(IConfiguration configuration) : IParquetExport
         var results = new List<ParquetExportPartResult>();
 
         await using var conn = new SqlConnection(connStr);
-        await conn.OpenAsync(ct).ConfigureAwait(false);
+        if (conn.State != ConnectionState.Open)
+            await conn.OpenAsync(ct).ConfigureAwait(false);
 
         // Build safe identifiers
         string qSchema = QuoteIdentifier(schemaName ?? "dbo");
         string qTable = QuoteIdentifier(tableName);
         string qAsOf = QuoteIdentifier(asOfDateColumn);
 
-        var sql = $"SELECT * FROM {qSchema}.{qTable} WHERE {qAsOf} = @asOfDate"; // No ORDER BY to avoid heavy sorts; acceptable for exports keyed by asOf.
+        var sql = $"SELECT * FROM {qSchema}.{qTable} WHERE {qAsOf} = @asOfDate";
         await using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.Add(new SqlParameter("@asOfDate", SqlDbType.DateTime2) { Value = asOfDate });
+
         // Use SequentialAccess to stream large columns (VARBINARY, XML, etc.) without buffering entire row
         await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess | CommandBehavior.CloseConnection, ct).ConfigureAwait(false);
 
@@ -101,112 +89,191 @@ public class ParquetExportService(IConfiguration configuration) : IParquetExport
         var schema = new ParquetSchema(fields.ToArray());
         var columnCount = fields.Count;
 
-        // If no rows, create an empty single part.
+        // If no rows, create an empty single part (produce synchronously)
         if (!reader.HasRows)
         {
-            ArchivalBlobInfo emptyBlob = await uploadPartAsync(0, async (s, token) =>
+            ArchivalBlobInfo emptyBlob = await uploadPartAsync(1, async (s, token) =>
             {
                 await using var writer = await ParquetWriter.CreateAsync(schema, s, cancellationToken: token).ConfigureAwait(false);
                 writer.CompressionMethod = CompressionMethod.Snappy;
                 // no rows written
             }, ct).ConfigureAwait(false);
 
-            results.Add(new ParquetExportPartResult
+            var emptyResult = new ParquetExportPartResult
             {
-                PartIndex = 0,
+                PartIndex = 1,
                 Metrics = new ParquetExportMetrics { RowCount = 0, ColumnCount = columnCount, SizeBytes = emptyBlob.ContentLength ?? -1 },
-                BlobInfo = emptyBlob
-            });
+                BlobInfo = emptyBlob,
+                WriteDuration = TimeSpan.Zero,
+                UploadDuration = TimeSpan.Zero,
+                TotalDuration = TimeSpan.Zero
+            };
 
+            _logger.LogInformation("ExportTableToPartsAsync: produced empty part {PartIndex} rows={RowCount} size={SizeBytes}",
+                emptyResult.PartIndex, emptyResult.Metrics.RowCount, emptyResult.Metrics.SizeBytes);
+
+            results.Add(emptyResult);
             return results;
         }
 
-        int partIndex = 0;
-        long totalRows = 0;
+        // Producer/consumer: write part into SpillableStream (pooled memory + spill) and upload concurrently.
+        var uploadSemaphore = new SemaphoreSlim(_uploadDegreeOfParallelism, _uploadDegreeOfParallelism);
+        var uploadTasks = new List<Task<ParquetExportPartResult>>();
+
+        int partIndex = 1;
         bool moreRows = true;
 
-        while (moreRows)
+        try
         {
-            int rowsInPart = 0;
-            long estimatedBytesForPart = 0;
-
-            async Task Writer(Stream output, CancellationToken token)
+            while (moreRows)
             {
-                await using var parquetWriter = await ParquetWriter.CreateAsync(schema, output, cancellationToken: token).ConfigureAwait(false);
-                parquetWriter.CompressionMethod = CompressionMethod.Snappy;
+                ct.ThrowIfCancellationRequested();
 
-                // Column buffers as lists of object? We will store per-column list and flush as row-groups
-                var columnBuffers = InitColumnBuffers(fieldCount);
-                int rowsInRowGroup = 0;
-                long bytesInRowGroup = 0;
+                int rowsInPart = 0;
+                long partSizeBytes = -1;
+                TimeSpan writeDuration;
 
-                while (rowsInPart < maxRowsPerPart)
+                using var spill = new SpillableStream(DefaultSpillThresholdBytes);
+
+                var swWrite = Stopwatch.StartNew();
+
+                // Write part into spillable stream
+                await using (var parquetWriter = await ParquetWriter.CreateAsync(schema, spill, cancellationToken: ct).ConfigureAwait(false))
                 {
-                    token.ThrowIfCancellationRequested();
+                    parquetWriter.CompressionMethod = CompressionMethod.Snappy;
 
-                    var hasRow = await reader.ReadAsync(token).ConfigureAwait(false);
-                    if (!hasRow)
+                    var columnBuffers = InitColumnBuffers(fieldCount);
+                    int rowsInRowGroup = 0;
+                    long bytesInRowGroup = 0;
+
+                    while (rowsInPart < maxRowsPerPart)
                     {
-                        moreRows = false;
-                        break;
+                        ct.ThrowIfCancellationRequested();
+
+                        var hasRow = await reader.ReadAsync(ct).ConfigureAwait(false);
+                        if (!hasRow)
+                        {
+                            moreRows = false;
+                            break;
+                        }
+
+                        for (int i = 0; i < fieldCount; i++)
+                        {
+                            object? val = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                            columnBuffers[i].Add(val);
+                            bytesInRowGroup += EstimateObjectSize(val);
+                        }
+
+                        rowsInRowGroup++;
+                        rowsInPart++;
+
+                        if (bytesInRowGroup >= RowGroupTargetBytes || rowsInRowGroup >= Math.Max(1, RowGroupTargetBytes / 1024))
+                        {
+                            await WriteRowGroupAsync(parquetWriter, fields, columnBuffers, ct).ConfigureAwait(false);
+                            columnBuffers = InitColumnBuffers(fieldCount);
+                            rowsInRowGroup = 0;
+                            bytesInRowGroup = 0;
+                        }
                     }
 
-                    // read row values sequentially
-                    for (int i = 0; i < fieldCount; i++)
+                    if (rowsInRowGroup > 0)
                     {
-                        object? val = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                        columnBuffers[i].Add(val);
-                        bytesInRowGroup += EstimateObjectSize(val);
+                        await WriteRowGroupAsync(parquetWriter, fields, columnBuffers, ct).ConfigureAwait(false);
                     }
 
-                    rowsInRowGroup++;
-                    rowsInPart++;
-                    totalRows++;
-
-                    // flush if row-group bytes exceeded target or row-group row count large
-                    if (bytesInRowGroup >= RowGroupTargetBytes || rowsInRowGroup >= Math.Max(1, RowGroupTargetBytes / 1024))
-                    {
-                        await WriteRowGroupAsync(parquetWriter, fields, columnBuffers, token).ConfigureAwait(false);
-                        columnBuffers = InitColumnBuffers(fieldCount);
-                        rowsInRowGroup = 0;
-                        bytesInRowGroup = 0;
-                    }
+                    // flush
+                    await spill.FlushAsync(ct).ConfigureAwait(false);
                 }
 
-                // flush any remaining rows in current part
-                if (rowsInRowGroup > 0)
+                swWrite.Stop();
+                writeDuration = swWrite.Elapsed;
+
+                // Obtain read stream for upload (ownership transferred to caller)
+                var readStream = spill.GetReadStream();
+                partSizeBytes = readStream.CanSeek ? readStream.Length : -1;
+
+                // Start upload task (consumer). Bounded concurrency via semaphore.
+                await uploadSemaphore.WaitAsync(ct).ConfigureAwait(false);
+
+                var indexForClosure = partIndex;
+                var rowsForClosure = rowsInPart;
+                var writeDurationForClosure = writeDuration;
+                var readStreamForClosure = readStream; // will be disposed by upload task
+
+                var uploadTask = Task.Run(async () =>
                 {
-                    await WriteRowGroupAsync(parquetWriter, fields, columnBuffers, token).ConfigureAwait(false);
-                }
-            }
+                    var swUpload = Stopwatch.StartNew();
+                    try
+                    {
+                        // Writer that copies the readStream into the provided out stream
+                        async Task Writer(Stream outStream, CancellationToken token)
+                        {
+                            if (readStreamForClosure.CanSeek) readStreamForClosure.Position = 0;
+                            await readStreamForClosure.CopyToAsync(outStream, 81920, token).ConfigureAwait(false);
+                        }
 
-            // The uploadPartAsync is expected to call our writer; it returns final blob info (ETag/Length)
-            ArchivalBlobInfo blob = await uploadPartAsync(partIndex, Writer, ct).ConfigureAwait(false);
+                        // Call caller-provided uploadPartAsync which will invoke our Writer
+                        var blob = await uploadPartAsync(indexForClosure, Writer, ct).ConfigureAwait(false);
 
-            var metrics = new ParquetExportMetrics
-            {
-                RowCount = rowsInPart,
-                ColumnCount = columnCount,
-                SizeBytes = blob.ContentLength ?? -1
-            };
+                        swUpload.Stop();
+                        var uploadDuration = swUpload.Elapsed;
+                        var totalDuration = writeDurationForClosure + uploadDuration;
 
-            results.Add(new ParquetExportPartResult
-            {
-                PartIndex = partIndex,
-                Metrics = metrics,
-                BlobInfo = blob
-            });
+                        var metrics = new ParquetExportMetrics
+                        {
+                            RowCount = rowsForClosure,
+                            ColumnCount = columnCount,
+                            SizeBytes = blob.ContentLength ?? partSizeBytes
+                        };
 
-            partIndex++;
+                        var partResult = new ParquetExportPartResult
+                        {
+                            PartIndex = indexForClosure,
+                            Metrics = metrics,
+                            BlobInfo = blob,
+                            WriteDuration = writeDurationForClosure,
+                            UploadDuration = uploadDuration,
+                            TotalDuration = totalDuration
+                        };
+
+                        // Log per-part telemetry
+                        _logger.LogInformation("Exported part {PartIndex}: rows={RowCount} size={SizeBytes} writeMs={WriteMs} uploadMs={UploadMs} totalMs={TotalMs}",
+                            partResult.PartIndex,
+                            partResult.Metrics.RowCount,
+                            partResult.Metrics.SizeBytes,
+                            partResult.WriteDuration.TotalMilliseconds,
+                            partResult.UploadDuration.TotalMilliseconds,
+                            partResult.TotalDuration.TotalMilliseconds);
+
+                        return partResult;
+                    }
+                    finally
+                    {
+                        // Ensure we dispose the readStream (returns pooled buffers or closes file)
+                        try { await readStreamForClosure.DisposeAsync().ConfigureAwait(false); } catch { /* ignore */ }
+                        uploadSemaphore.Release();
+                    }
+                }, ct);
+
+                uploadTasks.Add(uploadTask);
+
+                partIndex++;
+            } // end while producer loop
+
+            // Wait for all uploads to finish and collect results
+            var completed = await Task.WhenAll(uploadTasks).ConfigureAwait(false);
+            results.AddRange(completed.OrderBy(r => r.PartIndex));
+            return results;
         }
-
-        return results;
+        finally
+        {
+            // Nothing required; read streams and spills are disposed by upload tasks.
+        }
     }
 
     // Helpers
 
-    private static string QuoteIdentifier(string id)
-        => "[" + id.Replace("]", "]]") + "]";
+    private static string QuoteIdentifier(string id) => "[" + id.Replace("]", "]]") + "]";
 
     private static List<DataField> BuildParquetFields(IDataRecord reader)
     {
@@ -226,6 +293,7 @@ public class ParquetExportService(IConfiguration configuration) : IParquetExport
             else if (t == typeof(Guid) || t == typeof(Guid?)) list.Add(new DataField<string>(name));
             else list.Add(new DataField<string>(name));
         }
+
         return list;
     }
 
@@ -246,32 +314,43 @@ public class ParquetExportService(IConfiguration configuration) : IParquetExport
         return 16;
     }
 
-    private static async Task WriteRowGroupAsync(ParquetWriter parquetWriter, List<DataField> fields, List<List<object?>> columnBuffers, CancellationToken ct)
+    private static async Task WriteRowGroupAsync(ParquetWriter parquetWriter, List<DataField> fields,
+        List<List<object?>> columnBuffers, CancellationToken ct)
     {
         using var rowGroup = parquetWriter.CreateRowGroup();
+
         for (int i = 0; i < fields.Count; i++)
         {
             var field = fields[i];
             var buffer = columnBuffers[i];
-            var clrType = field.ClrType;
 
-            // Create typed array and copy values
-            var arr = Array.CreateInstance(clrType, buffer.Count);
-            for (int r = 0; r < buffer.Count; r++)
-            {
-                object? v = buffer[r];
-                if (v == null)
-                    arr.SetValue(null, r);
-                else
-                {
-                    // Handle GUIDs mapped to string
-                    if (clrType == typeof(string) && v is Guid g) arr.SetValue(g.ToString(), r);
-                    else arr.SetValue(Convert.ChangeType(v, Nullable.GetUnderlyingType(clrType) ?? clrType), r);
-                }
-            }
+            // Convert buffered values to object?[] then produce a strongly-typed DataColumn
+            var columnData = buffer.ToArray();
+            var dataColumn = GetColumn(field, columnData);
 
-            var dataColumn = new Parquet.Data.DataColumn(field, arr);
             await rowGroup.WriteColumnAsync(dataColumn, ct).ConfigureAwait(false);
         }
+    }
+
+    private static Parquet.Data.DataColumn GetColumn(DataField columnSchema, object?[] columnData)
+    {
+        // Resolve underlying CLR type (handle nullable<T>)
+        var clrType = Nullable.GetUnderlyingType(columnSchema.ClrType) ?? columnSchema.ClrType;
+        var typeCode = Type.GetTypeCode(clrType);
+
+        // Use LINQ Cast<T?> to create correctly-typed arrays the Parquet library expects.
+        return typeCode switch
+        {
+            TypeCode.String => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<string?>().ToArray()),
+            TypeCode.Int32 => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<int?>().ToArray()),
+            TypeCode.Int64 => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<long?>().ToArray()),
+            TypeCode.Decimal => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<decimal?>().ToArray()),
+            TypeCode.Double => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<double?>().ToArray()),
+            TypeCode.Single => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<float?>().ToArray()),
+            TypeCode.DateTime => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<DateTime?>().ToArray()),
+            TypeCode.Boolean => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<bool?>().ToArray()),
+            TypeCode.Byte => new Parquet.Data.DataColumn(columnSchema, columnData.Cast<byte?>().ToArray()),
+            _ => new Parquet.Data.DataColumn(columnSchema, columnData)
+        };
     }
 }
